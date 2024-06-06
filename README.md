@@ -1,6 +1,6 @@
 # MMDiT in Jax
 
-![](../resources/cifar10_result.gif)
+![](resources/cifar10_result.gif)
 
 _Inference with a trained MMDiT model on CIFAR-10_
 
@@ -17,11 +17,11 @@ This is a reproduction of the [Diffusion Transformer](https://arxiv.org/abs/2212
 
 I've trained models on CIFAR-10, and several other reference datasets, and was able to achieve competitive results. I plan on training on ImageNet soon, and will update this section with the results.
 
-![](../resources/mnist_result.gif)
+![](resources/mnist_result.gif)
 
 _Inference on MNIST_
 
-![](../resources/flowers_result.gif)
+![](resources/flowers_result.gif)
 
 _Inference on Oxford Flowers dataset_
 
