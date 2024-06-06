@@ -39,7 +39,7 @@ I wanted to brush up on my Jax knowledge, and also hadn't implemented a full MMD
 
 ### Acknowledgements
 
-I heavily relied on Simo Ryu's [minRF](https://github.com/cloneofsimo/minRF) repo for the original implementation, especially the sampling code for rectified flow; as well as the [original DiT repo](https://github.com/facebookresearch/DiT) and 
+I heavily relied on Simo Ryu's [minRF](https://github.com/cloneofsimo/minRF) repo for the original implementation, especially the sampling code for rectified flow; as well as the [original DiT repo](https://github.com/facebookresearch/DiT).
 
 I also learned a lot from Rafi Witten's great [High Performance LLMs in Jax](https://github.com/rwitten/HighPerfLLMs2024) course, especially multi-device training in Jax.
 
