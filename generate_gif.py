@@ -9,6 +9,9 @@ def split_image_to_gif(
     gif_path: str = "result.gif",
     fps: int = 10,
 ):
+    """
+    Utility function to split a grid of images and convert it to a GIF, used for generating the README GIFs.
+    """
 
     image = Image.open(image_path)
     image_width, image_height = image.size

@@ -317,6 +317,7 @@ def process_batch(
     Process a batch of samples from the dataset.
     Provide the entire batch to the train/eval step, and the in_sharding will partition across
     devices.
+    If an image is not square, it will be center cropped to the smaller dimension, before being resized to the latent size.
     """
 
     images: List[Image.Image] = batch[image_field_name]
