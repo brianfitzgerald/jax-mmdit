@@ -1,8 +1,7 @@
 # MMDiT in Jax
 
-_Inference with a trained MMDiT model on the Oxford Flowers dataset._
-
 ![](resources/flowers_result.gif)
+_Inference with a trained MMDiT model on the Oxford Flowers dataset._
 
 This is a reproduction of the [Diffusion Transformer](https://arxiv.org/abs/2212.09748) architecture, along with the [Rectified Flow](https://arxiv.org/abs/2209.03003) sampling method, in Jax. 
 
@@ -19,14 +18,11 @@ I was able to achieve comparable validation loss with MNIST and CIFAR-10 to othe
 
 
 ![](resources/mnist_result.gif)
-
 _Inference on MNIST_
 
 
-_Inference on the CIFAR-10 dataset._
-
 ![](resources/cifar10_result.gif)
-
+_Inference on the CIFAR-10 dataset._
 
 ### Why was this project written?
 
