@@ -10,11 +10,11 @@ This is a reproduction of the [Diffusion Transformer](https://arxiv.org/abs/2212
 - Training configs for a number of popular reference datasets - CIFAR-10, ImageNet, MNIST, etc. It should be trivial to add additional datasets from HuggingFace.
 - DDP support for multi-GPU training (FSDP planned in the near future)
 - Mixed precision training, checkpointing, profiler, and TensorBoard logging.
-- No dependencies on PyTorch, Tensorflow, etc - just JAX and Flax.
+- Minimal dependencies - only Jax, Flax, HuggingFace Datasets, and some utility libraries are required.
 
 ### Results
 
-I was able to achieve comparable validation loss with MNIST and CIFAR-10 to other DiT implementations, so I'm fairly confident in this implementation. I plan to train on ImageNet soon, and will update this README with the results.
+I was able to achieve comparable validation loss with MNIST and CIFAR-10 to other DiT implementations. I plan to train on ImageNet soon, and will update this README with the results.
 
 
 ![](resources/mnist_result.gif)
@@ -45,6 +45,7 @@ n_eval_batches: Number of batches to evaluate on.
 sample_every_n: Number of epochs between sampling runs.
 dataset_name: Name of the dataset config to select, valid options are in DATASET_CONFIGS.
 profile: Run a single train and eval step, and print out the cost analysis, then exit.
+half_precision: case the model to fp16 for training.
 ```
 
 TensorBoard is used for logging. Samples will be logged to the `samples` directory, with the X dimension representing batch and Y dimension representing each iteration of the sampling loop.

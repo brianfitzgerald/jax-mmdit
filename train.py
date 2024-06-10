@@ -163,12 +163,14 @@ class Trainer:
         dataset_config: DatasetConfig,
         learning_rate: float = 5e-5,
         profile: bool = False,
+        half_precision: bool = False,
     ) -> None:
         self.optimizer = optax.chain(
             optax.adam(learning_rate=learning_rate),
         )
         init_key, self.train_key = random.split(rng, 2)
         latent_size, n_channels = dataset_config.latent_size, dataset_config.n_channels
+        dtype = jnp.float16 if half_precision else jnp.float32
 
         self.model = DiTModel(
             dim=dataset_config.model_config.dim,
@@ -178,7 +180,7 @@ class Trainer:
             in_channels=n_channels,
             out_channels=n_channels,
             n_classes=dataset_config.n_classes,
-            dtype=jnp.float16,
+            dtype=dtype,
         )
         print(self.model)
         n_devices = len(jax.devices())
@@ -213,9 +215,7 @@ class Trainer:
 
         # Async checkpointer for saving checkpoints across processes
         base_dir_abs = os.getcwd()
-        self.checkpoint_manager = ocp.CheckpointManager(
-            f"{base_dir_abs}/checkpoints"
-        )
+        self.checkpoint_manager = ocp.CheckpointManager(f"{base_dir_abs}/checkpoints")
 
         # The axes are (data, model), so the mesh is (n_devices, 1) as the model is replicated across devices.
         # This object corresponds the axis names to the layout of the physical devices,
@@ -257,7 +257,9 @@ class Trainer:
         self.train_state = jit_create_train_state_fn(
             *input_values, self.model, self.optimizer
         )
-        parameter_count = sum(x.size for x in jax.tree_util.tree_leaves(self.train_state.params))
+        parameter_count = sum(
+            x.size for x in jax.tree_util.tree_leaves(self.train_state.params)
+        )
         logging.info(f"Model parameter count: {parameter_count}")
 
         if profile:
@@ -354,7 +356,9 @@ def run_eval(
     """
     num_eval_batches = len(eval_dataset) // dataset_config.batch_size
     eval_iter = tqdm(
-        eval_dataset.iter(batch_size=16, drop_last_batch=True), leave=False, total=num_eval_batches
+        eval_dataset.iter(batch_size=16, drop_last_batch=True),
+        leave=False,
+        total=num_eval_batches,
     )
     for j, eval_batch in enumerate(eval_iter):
         if j >= n_eval_batches:
@@ -413,6 +417,7 @@ def main(
     sample_every_n: int = 1,
     dataset_name: str = "flowers",
     profile: bool = False,
+    half_precision: bool = False,
     **kwargs,
 ):
     """
@@ -425,7 +430,7 @@ def main(
         sample_every_n: Number of epochs between sampling runs.
         dataset_name: Name of the dataset config to select, valid options are in DATASET_CONFIGS.
         profile: Run a single train and eval step, and print out the cost analysis, then exit.
-
+        half_precision: case the model to fp16 for training.
     """
 
     assert not kwargs, f"Unrecognized arguments: {kwargs.keys()}"
@@ -438,7 +443,7 @@ def main(
 
     rng = random.PRNGKey(0)
 
-    trainer = Trainer(rng, dataset_config, learning_rate, profile)
+    trainer = Trainer(rng, dataset_config, learning_rate, profile, half_precision)
 
     profiler_trace_dir = "traces"
 
@@ -452,7 +457,9 @@ def main(
         iter_description_dict.update({"epoch": epoch})
         n_batches = len(train_dataset) // dataset_config.batch_size
         train_iter = tqdm(
-            train_dataset.iter(batch_size=dataset_config.batch_size, drop_last_batch=True),
+            train_dataset.iter(
+                batch_size=dataset_config.batch_size, drop_last_batch=True
+            ),
             total=n_batches,
             leave=False,
         )

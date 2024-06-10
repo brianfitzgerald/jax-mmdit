@@ -1,24 +1,9 @@
-nvidia-cuda-nvcc
-jax[cuda12_pip] -f https://storage.googleapis.com/jax-releases/jax_cuda_releases.html
+jax
 optax
 flax
 tqdm
-dm-pix
-wandb
 fire
-transformers
 datasets[jax]
-evaluate
-pyright
 tensorboardX
-tabulate
-hf_transfer
-mosaicml-streaming
-asyncio
-colour
-git+https://github.com/chalk-diagrams/chalk/
-matplotlib
-graphviz
 imageio
-pygifsicle
 orbax
