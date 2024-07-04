@@ -1,38 +1,39 @@
 import functools
 import logging
+import os
+import time
 from contextlib import nullcontext
 from dataclasses import dataclass
-from typing import List, Optional, Tuple, cast, Any
-import time
-import orbax
-import os
-import orbax.checkpoint as ocp
-
+from typing import Any, List, Optional, Tuple, cast
 
 import fire
 import jax
 import jax.experimental.compilation_cache.compilation_cache
 import jax.numpy as jnp
-from jax.sharding import Mesh, PartitionSpec, NamedSharding
-from jax.experimental import mesh_utils
 import optax
+import orbax
+import orbax.checkpoint
+import orbax.checkpoint as ocp
 from chex import PRNGKey
 from datasets.arrow_dataset import Dataset
 from datasets.dataset_dict import DatasetDict
 from datasets.load import load_dataset
+from flax import linen as nn
 from flax.linen.summary import tabulate
 from flax.training.train_state import TrainState
-from flax import linen as nn
 from jax import random
+from jax.experimental import mesh_utils
+from jax.sharding import Mesh, NamedSharding, PartitionSpec
 from jax.stages import Compiled, Wrapped
-import orbax.checkpoint
-from labels import IMAGENET_LABELS_NAMES
-from model import DiTModel
 from PIL import Image
-from sampling import rectified_flow_sample, rectified_flow_step
 from tensorboardX import SummaryWriter
 from tqdm import tqdm
-from utils import ensure_directory, image_grid, normalize_images, center_crop
+
+from labels import IMAGENET_LABELS_NAMES
+from model import DiTModel
+from sampling import rectified_flow_sample, rectified_flow_step
+from utils import center_crop, ensure_directory, image_grid, normalize_images
+from profiling import trace_module_calls
 
 jax.experimental.compilation_cache.compilation_cache.set_cache_dir("jit_cache")
 
@@ -57,6 +58,7 @@ class ModelConfig:
     dim: int
     n_layers: int
     n_heads: int
+    patch_size: int = 2
 
 
 @dataclass
@@ -90,7 +92,7 @@ DATASET_CONFIGS = {
         label_names=list(IMAGENET_LABELS_NAMES.values()),
         n_labels_to_sample=10,
         batch_size=64,
-        model_config=ModelConfig(dim=256, n_layers=12, n_heads=8),
+        model_config=ModelConfig(dim=1152, n_layers=28, n_heads=16, patch_size=2),
     ),
     # https://huggingface.co/datasets/cifar10
     "cifar10": DatasetConfig(
@@ -270,7 +272,7 @@ class Trainer:
                 compute_flops=True,
                 compute_vjp_flops=True,
             )
-            print(tabulate_fn(*input_values, init_key, True))
+            calls = trace_module_calls(self.model, *input_values)
 
         logging.info("JIT compiling step functions...")
 
@@ -305,7 +307,9 @@ class Trainer:
             logging.info(f"Steps compiled, train cost analysis: {train_cost_analysis}")
 
     def save_checkpoint(self, global_step: int):
-        self.checkpoint_manager.save(global_step, self.train_state)
+        self.checkpoint_manager.save(
+            global_step, self.train_state, args=ocp.args.StandardSave(self.train_state)
+        )
 
 
 def process_batch(
@@ -415,7 +419,7 @@ def main(
     eval_save_steps: int = 250,
     n_eval_batches: int = 1,
     sample_every_n: int = 1,
-    dataset_name: str = "flowers",
+    dataset_name: str = "mnist",
     profile: bool = False,
     half_precision: bool = False,
     **kwargs,
@@ -478,9 +482,10 @@ def main(
             step_key = random.PRNGKey(global_step)
 
             if profile:
-                profile_ctx = jax.profiler.trace(
-                    profiler_trace_dir, create_perfetto_link=True
-                )
+                # profile_ctx = jax.profiler.trace(
+                #     profiler_trace_dir, create_perfetto_link=True
+                # )
+                profile_ctx = nullcontext()
             else:
                 profile_ctx = nullcontext()
 
