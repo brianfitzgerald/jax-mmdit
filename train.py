@@ -184,7 +184,6 @@ class Trainer:
             n_classes=dataset_config.n_classes,
             dtype=dtype,
         )
-        print(self.model)
         n_devices = len(jax.devices())
 
         # x, y, t
@@ -266,13 +265,7 @@ class Trainer:
 
         if profile:
             logging.info("Running model inspection...")
-            tabulate_fn = tabulate(
-                self.model,
-                self.train_key,
-                compute_flops=True,
-                compute_vjp_flops=True,
-            )
-            calls = trace_module_calls(self.model, *input_values)
+            calls = trace_module_calls(self.model, init_key, *input_values, init_key, True)
 
         logging.info("JIT compiling step functions...")
 
@@ -528,7 +521,8 @@ def main(
                 )
 
             if profile:
-                break
+                logging.info("\nExiting after profiling a single step.")
+                return
 
         if epoch % sample_every_n == 0 and not profile:
             trainer.save_checkpoint(global_step)
