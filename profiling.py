@@ -1,13 +1,11 @@
 import jax
 import flax.linen.module as module_lib
-from flax.linen.module import _CallInfo
 from flax.linen.summary import (
-    _process_inputs,
-    _get_module_variables,
     _get_call_flops,
 )
-from typing import Set, Tuple, List, Dict, Any
+from typing import Tuple, List
 from dataclasses import dataclass
+from flax.linen import Conv
 
 
 @dataclass
@@ -18,27 +16,37 @@ class ModuleCall:
     vjp_flops: float
 
 
+DEVICE_PEAK_FLOPS = {
+    "NVIDIA H100 80GB HBM3": {
+        "fp32": 5.1e13,
+        "fp16": 1.513e15,
+    }
+}
+
+def get_peak_flops() -> float:
+    device_kind = jax.devices()[0].device_kind
+    peak_flops = DEVICE_PEAK_FLOPS[device_kind]["fp32"]
+    return peak_flops
+
+
 def trace_module_calls(module: module_lib.Module, *args, **kwargs) -> List[ModuleCall]:
     """
     Get the FLOPs estimate and parameter count for a Flax module.
     """
+
+
     with module_lib._tabulate_context():
 
         def _get_variables():
             return module.init(*args, **kwargs)
 
-        variables = jax.eval_shape(_get_variables)
+        jax.eval_shape(_get_variables)
         calls = module_lib._context.call_info_stack[-1].calls
         calls.sort(key=lambda c: c.index)
 
-    all_paths: Set[Tuple[str, ...]] = set(call.path for call in calls)
-    visited_paths: Set[Tuple[str, ...]] = set()
     calls_out: List[ModuleCall] = []
 
     for c in calls:
-        inputs = _process_inputs(c.args, c.kwargs)
-
-        visited_paths.add(c.path)
         flops, vjp_flops = _get_call_flops(c, True, True)
         calls_out.append(
             ModuleCall(

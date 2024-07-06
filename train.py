@@ -1,25 +1,22 @@
 import functools
-import logging
+from loguru import logger
 import os
 import time
 from contextlib import nullcontext
 from dataclasses import dataclass
-from typing import Any, List, Optional, Tuple, cast
+from typing import Any, List, Optional, Tuple, cast, Dict
 
 import fire
 import jax
 import jax.experimental.compilation_cache.compilation_cache
 import jax.numpy as jnp
 import optax
-import orbax
-import orbax.checkpoint
 import orbax.checkpoint as ocp
 from chex import PRNGKey
 from datasets.arrow_dataset import Dataset
 from datasets.dataset_dict import DatasetDict
 from datasets.load import load_dataset
 from flax import linen as nn
-from flax.linen.summary import tabulate
 from flax.training.train_state import TrainState
 from jax import random
 from jax.experimental import mesh_utils
@@ -33,20 +30,19 @@ from labels import IMAGENET_LABELS_NAMES
 from model import DiTModel
 from sampling import rectified_flow_sample, rectified_flow_step
 from utils import center_crop, ensure_directory, image_grid, normalize_images
-from profiling import trace_module_calls
+from profiling import trace_module_calls, get_peak_flops
 
 jax.experimental.compilation_cache.compilation_cache.set_cache_dir("jit_cache")
 
 
-logging.basicConfig(
-    format="%(asctime)s - %(levelname)s - %(name)s - %(message)s",
-    datefmt="%m/%d/%Y %H:%M:%S",
-    level=logging.INFO,
-)
+print("JAX devices: ", jax.devices())
+logger.info(f"JAX host count: {jax.device_count()}")
 
 
-def format_float_for_display(val: float | int) -> str:
-    return f"{val:06.3f}"
+def fmt_float_display(val: float | int) -> str:
+    if val > 1e3:
+        return f"{val:.2e}"
+    return f"{val:3.3f}"
 
 
 @dataclass
@@ -126,6 +122,7 @@ DATASET_CONFIGS = {
         n_channels=1,
         n_classes=10,
         latent_size=28,
+        batch_size=512
     ),
     "flowers": DatasetConfig(
         hf_dataset_uri="nelorth/oxford-flowers",
@@ -207,12 +204,12 @@ class Trainer:
             )
             return train_state
 
-        logging.info(f"Available devices: {jax.devices()}")
+        logger.info(f"Available devices: {jax.devices()}")
 
         # Create a device mesh according to the physical layout of the devices.
         # device_mesh is just an ndarray
         device_mesh = mesh_utils.create_device_mesh((n_devices, 1))
-        logging.info(f"Device mesh: {device_mesh}")
+        logger.info(f"Device mesh: {device_mesh}")
 
         # Async checkpointer for saving checkpoints across processes
         base_dir_abs = os.getcwd()
@@ -223,7 +220,7 @@ class Trainer:
         # so that sharding a tensor along the axes shards according to the corresponding device_mesh layout.
         # i.e. with device layout of (8, 1), data would be replicated to all devices, and model would be replicated to 1 device.
         self.mesh = Mesh(device_mesh, axis_names=("data", "model"))
-        logging.info(f"Mesh: {self.mesh}")
+        logger.info(f"Mesh: {self.mesh}")
 
         def get_sharding_for_spec(pspec: PartitionSpec) -> NamedSharding:
             """
@@ -247,7 +244,7 @@ class Trainer:
         train_state_sharding = nn.get_sharding(train_state_sharding_shape, self.mesh)
         input_sharding: Any = (x_sharding, x_sharding, x_sharding)
 
-        logging.info(f"Initializing model...")
+        logger.info(f"Initializing model...")
         # Shard the train_state so so that it's replicated across devices
         jit_create_train_state_fn = jax.jit(
             create_train_state,
@@ -261,13 +258,9 @@ class Trainer:
         parameter_count = sum(
             x.size for x in jax.tree_util.tree_leaves(self.train_state.params)
         )
-        logging.info(f"Model parameter count: {parameter_count}")
+        logger.info(f"Model parameter count: {parameter_count}")
 
-        if profile:
-            logging.info("Running model inspection...")
-            calls = trace_module_calls(self.model, init_key, *input_values, init_key, True)
-
-        logging.info("JIT compiling step functions...")
+        logger.info("JIT compiling step functions...")
 
         step_in_sharding: Any = (
             train_state_sharding,
@@ -291,22 +284,21 @@ class Trainer:
             out_shardings=step_out_sharding,
         )
 
-        if profile:
-            logging.info("AOT compiling step functions...")
-            compiled_step: Compiled = self.train_step.lower(
-                self.train_state, *input_values[:2], init_key
-            ).compile()
-            train_cost_analysis = compiled_step.cost_analysis()
-            logging.info(f"Steps compiled, train cost analysis: {train_cost_analysis}")
+        logger.info("AOT compiling step functions...")
+        compiled_step: Compiled = self.train_step.lower(
+            self.train_state, *input_values[:2], init_key
+        ).compile()
+        train_cost_analysis: Dict = compiled_step.cost_analysis()[0]  # type: ignore
+        trace_module_calls(self.model, init_key, *input_values, init_key, True)
+        self.flops_for_step = train_cost_analysis.get("flops", 0)
+        logger.info(f"Steps compiled, train cost analysis FLOPs: {self.flops_for_step}")
 
     def save_checkpoint(self, global_step: int):
-        self.checkpoint_manager.save(
-            global_step, self.train_state, args=ocp.args.StandardSave(self.train_state)
-        )
+        self.checkpoint_manager.save(global_step, self.train_state)
 
 
 def process_batch(
-    batch: dict,
+    batch: Any,
     latent_size: int,
     n_channels: int,
     label_field_name: str,
@@ -343,7 +335,7 @@ def run_eval(
     trainer: Trainer,
     rng: PRNGKey,
     summary_writer: SummaryWriter,
-    iter_description_dict: dict,
+    iter_description_dict: Dict,
     global_step: int,
     do_sample: bool,
     epoch: int,
@@ -356,6 +348,7 @@ def run_eval(
         eval_dataset.iter(batch_size=16, drop_last_batch=True),
         leave=False,
         total=num_eval_batches,
+        dynamic_ncols=True,
     )
     for j, eval_batch in enumerate(eval_iter):
         if j >= n_eval_batches:
@@ -372,7 +365,7 @@ def run_eval(
         eval_loss, trainer.train_state = trainer.eval_step(
             trainer.train_state, images, labels, rng
         )
-        iter_description_dict.update({"eval_loss": format_float_for_display(eval_loss)})
+        iter_description_dict.update({"eval_loss": fmt_float_display(eval_loss)})
         eval_iter.set_postfix(iter_description_dict)
         summary_writer.add_scalar("eval_loss", eval_loss, global_step)
 
@@ -412,7 +405,7 @@ def main(
     eval_save_steps: int = 250,
     n_eval_batches: int = 1,
     sample_every_n: int = 1,
-    dataset_name: str = "mnist",
+    dataset_name: str = "cifar10",
     profile: bool = False,
     half_precision: bool = False,
     **kwargs,
@@ -441,8 +434,7 @@ def main(
     rng = random.PRNGKey(0)
 
     trainer = Trainer(rng, dataset_config, learning_rate, profile, half_precision)
-
-    profiler_trace_dir = "traces"
+    device_count = jax.device_count()
 
     summary_writer = SummaryWriter(flush_secs=1, max_queue=1)
     ensure_directory("samples", clear=True)
@@ -459,6 +451,7 @@ def main(
             ),
             total=n_batches,
             leave=False,
+            dynamic_ncols=True,
         )
         for i, batch in enumerate(train_iter):
 
@@ -488,15 +481,30 @@ def main(
                     trainer.train_state, images, labels, step_key
                 )
                 trainer.train_state = updated_state
+
+                step_duration = time.perf_counter() - step_start_time
+                flops_device_sec = trainer.flops_for_step / (
+                    step_duration * device_count
+                )
+
+                peak_flops = get_peak_flops()
+                mfu = flops_device_sec / peak_flops
+                iter_description_dict.update(
+                    {
+                        "flops_device_sec": fmt_float_display(flops_device_sec),
+                        "mfu": fmt_float_display(mfu),
+                    }
+                )
+
                 summary_writer.add_scalar(
                     "train_step_time",
-                    time.perf_counter() - step_start_time,
+                    step_duration,
                     global_step,
                 )
 
             iter_description_dict.update(
                 {
-                    "loss": format_float_for_display(train_loss),
+                    "loss": fmt_float_display(train_loss),
                     "epoch": epoch,
                     "step": i,
                 }
@@ -521,7 +529,7 @@ def main(
                 )
 
             if profile:
-                logging.info("\nExiting after profiling a single step.")
+                logger.info("\nExiting after profiling a single step.")
                 return
 
         if epoch % sample_every_n == 0 and not profile:
