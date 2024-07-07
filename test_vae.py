@@ -1,16 +1,17 @@
-from typing import Dict
 import jax
 import jax.numpy as jnp
+from jax import Array
 
-from vae.vae_flax import FlaxAutoencoderKL
+from vae.vae_flax import load_pretrained_vae
 
-vae = FlaxAutoencoderKL()
+vae, params = load_pretrained_vae()
+
 
 @jax.jit
-def step(sample: Dict):
-    return vae(sample['latent'])
+def step(sample: Array):
+    return vae.apply(params, sample)
 
 
-test_latent = jnp.zeros((1, 32, 32, 4))
+test_latent = jnp.zeros((1, 3, 256, 256))
 
-out = step({"latent": test_latent})
+out = step(test_latent)

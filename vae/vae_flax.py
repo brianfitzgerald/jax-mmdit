@@ -1,21 +1,23 @@
 import math
 from functools import partial
-from typing import Optional, Tuple
+from typing import Optional, Tuple, Dict, Any
+from dataclasses import dataclass
+import dataclasses
+from huggingface_hub import snapshot_download
 
 import flax.linen as nn
 import jax
 import jax.numpy as jnp
 from flax.core.frozen_dict import FrozenDict
+from flax.serialization import from_bytes
+from flax.training.train_state import TrainState
+import json
+import os
 
 CONFIG_NAME = "config.json"
 WEIGHTS_NAME = "diffusion_pytorch_model.bin"
 WEIGHTS_INDEX_NAME = "diffusion_pytorch_model.bin.index.json"
 FLAX_WEIGHTS_NAME = "diffusion_flax_model.msgpack"
-ONNX_WEIGHTS_NAME = "model.onnx"
-SAFETENSORS_WEIGHTS_NAME = "diffusion_pytorch_model.safetensors"
-SAFE_WEIGHTS_INDEX_NAME = "diffusion_pytorch_model.safetensors.index.json"
-SAFETENSORS_FILE_EXTENSION = "safetensors"
-ONNX_EXTERNAL_WEIGHTS_NAME = "weights.pb"
 
 
 class FlaxUpsample2D(nn.Module):
@@ -538,8 +540,8 @@ class FlaxDiagonalGaussianDistribution(object):
         return self.mean
 
 
-class FlaxAutoencoderKL(nn.Module):
-
+@dataclass
+class AutoencoderConfig:
     in_channels: int = 3
     out_channels: int = 3
     down_block_types: Tuple[str] = ("DownEncoderBlock2D",)
@@ -551,6 +553,12 @@ class FlaxAutoencoderKL(nn.Module):
     norm_num_groups: int = 32
     sample_size: int = 32
     scaling_factor: float = 0.18215
+    dtype: jnp.dtype = jnp.float32
+
+
+class FlaxAutoencoderKL(nn.Module):
+
+    config: AutoencoderConfig
     dtype: jnp.dtype = jnp.float32
 
     def setup(self):
@@ -592,7 +600,7 @@ class FlaxAutoencoderKL(nn.Module):
 
     def init_weights(self, rng: jax.Array) -> FrozenDict:
         # init input tensors
-        sample_shape = (1, self.in_channels, self.sample_size, self.sample_size)
+        sample_shape = (1, self.config.in_channels, self.config.sample_size, self.config.sample_size)
         sample = jnp.zeros(sample_shape, dtype=jnp.float32)
 
         params_rng, dropout_rng, gaussian_rng = jax.random.split(rng, 3)
@@ -631,3 +639,25 @@ class FlaxAutoencoderKL(nn.Module):
         sample = self.decode(hidden_states)
 
         return sample
+
+
+def load_pretrained_vae(
+    hf_model_id: str = "pcuenq/sd-vae-ft-mse-flax",
+) -> Tuple[FlaxAutoencoderKL, Any]:
+    folder_path = snapshot_download(hf_model_id)
+
+    config_json: Dict = json.load(open(os.path.join(folder_path, CONFIG_NAME), "r"))
+    config_fields = set([field.name for field in dataclasses.fields(AutoencoderConfig)])
+    for key in list(config_json.keys()):
+        if key not in config_fields:
+            config_json.pop(key)
+    config = AutoencoderConfig(**config_json)
+
+    flax_weights_binary = open(
+        os.path.join(folder_path, FLAX_WEIGHTS_NAME), "rb"
+    ).read()
+    flax_weights_state_dict = from_bytes(FlaxAutoencoderKL, flax_weights_binary)
+    model = FlaxAutoencoderKL(config)
+    variables = model.init_weights(jax.random.PRNGKey(0))
+    variables['params'] = flax_weights_state_dict
+    return model, variables
