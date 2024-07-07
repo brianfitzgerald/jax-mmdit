@@ -1,12 +1,21 @@
 import math
 from functools import partial
-from typing import Tuple, Optional
+from typing import Optional, Tuple
 
-import flax
 import flax.linen as nn
 import jax
 import jax.numpy as jnp
 from flax.core.frozen_dict import FrozenDict
+
+CONFIG_NAME = "config.json"
+WEIGHTS_NAME = "diffusion_pytorch_model.bin"
+WEIGHTS_INDEX_NAME = "diffusion_pytorch_model.bin.index.json"
+FLAX_WEIGHTS_NAME = "diffusion_flax_model.msgpack"
+ONNX_WEIGHTS_NAME = "model.onnx"
+SAFETENSORS_WEIGHTS_NAME = "diffusion_pytorch_model.safetensors"
+SAFE_WEIGHTS_INDEX_NAME = "diffusion_pytorch_model.safetensors.index.json"
+SAFETENSORS_FILE_EXTENSION = "safetensors"
+ONNX_EXTERNAL_WEIGHTS_NAME = "weights.pb"
 
 
 class FlaxUpsample2D(nn.Module):
@@ -65,7 +74,9 @@ class FlaxResnetBlock2D(nn.Module):
     dtype: jnp.dtype = jnp.float32
 
     def setup(self):
-        out_channels = self.in_channels if self.out_channels is None else self.out_channels
+        out_channels = (
+            self.in_channels if self.out_channels is None else self.out_channels
+        )
 
         self.norm1 = nn.GroupNorm(num_groups=self.groups, epsilon=1e-6)
         self.conv1 = nn.Conv(
@@ -86,7 +97,11 @@ class FlaxResnetBlock2D(nn.Module):
             dtype=self.dtype,
         )
 
-        use_nin_shortcut = self.in_channels != out_channels if self.use_nin_shortcut is None else self.use_nin_shortcut
+        use_nin_shortcut = (
+            self.in_channels != out_channels
+            if self.use_nin_shortcut is None
+            else self.use_nin_shortcut
+        )
 
         self.conv_shortcut = None
         if use_nin_shortcut:
@@ -123,7 +138,11 @@ class FlaxAttentionBlock(nn.Module):
     dtype: jnp.dtype = jnp.float32
 
     def setup(self):
-        self.num_heads = self.channels // self.num_head_channels if self.num_head_channels is not None else 1
+        self.num_heads = (
+            self.channels // self.num_head_channels
+            if self.num_head_channels is not None
+            else 1
+        )
 
         dense = partial(nn.Dense, self.channels, dtype=self.dtype)
 
@@ -260,7 +279,11 @@ class FlaxUNetMidBlock2D(nn.Module):
     dtype: jnp.dtype = jnp.float32
 
     def setup(self):
-        resnet_groups = self.resnet_groups if self.resnet_groups is not None else min(self.in_channels // 4, 32)
+        resnet_groups = (
+            self.resnet_groups
+            if self.resnet_groups is not None
+            else min(self.in_channels // 4, 32)
+        )
 
         # there is always at least one resnet
         resnets = [
@@ -356,7 +379,9 @@ class FlaxEncoder(nn.Module):
         )
 
         # end
-        conv_out_channels = 2 * self.out_channels if self.double_z else self.out_channels
+        conv_out_channels = (
+            2 * self.out_channels if self.double_z else self.out_channels
+        )
         self.conv_norm_out = nn.GroupNorm(num_groups=self.norm_num_groups, epsilon=1e-6)
         self.conv_out = nn.Conv(
             conv_out_channels,
@@ -486,10 +511,16 @@ class FlaxDiagonalGaussianDistribution(object):
             return jnp.array([0.0])
 
         if other is None:
-            return 0.5 * jnp.sum(self.mean**2 + self.var - 1.0 - self.logvar, axis=[1, 2, 3])
+            return 0.5 * jnp.sum(
+                self.mean**2 + self.var - 1.0 - self.logvar, axis=[1, 2, 3]
+            )
 
         return 0.5 * jnp.sum(
-            jnp.square(self.mean - other.mean) / other.var + self.var / other.var - 1.0 - self.logvar + other.logvar,
+            jnp.square(self.mean - other.mean) / other.var
+            + self.var / other.var
+            - 1.0
+            - self.logvar
+            + other.logvar,
             axis=[1, 2, 3],
         )
 
@@ -498,7 +529,10 @@ class FlaxDiagonalGaussianDistribution(object):
             return jnp.array([0.0])
 
         logtwopi = jnp.log(2.0 * jnp.pi)
-        return 0.5 * jnp.sum(logtwopi + self.logvar + jnp.square(sample - self.mean) / self.var, axis=axis)
+        return 0.5 * jnp.sum(
+            logtwopi + self.logvar + jnp.square(sample - self.mean) / self.var,
+            axis=axis,
+        )
 
     def mode(self):
         return self.mean
@@ -597,4 +631,3 @@ class FlaxAutoencoderKL(nn.Module):
         sample = self.decode(hidden_states)
 
         return sample
-
