@@ -1,9 +1,11 @@
 import math
 from functools import partial
-from typing import Optional, Tuple, Dict, Any
+from typing import Optional, Tuple, Dict, Any, Union
 from dataclasses import dataclass
 import dataclasses
 from huggingface_hub import snapshot_download
+from safetensors.flax import load
+from loguru import logger
 
 import flax.linen as nn
 import jax
@@ -14,10 +16,10 @@ from flax.training.train_state import TrainState
 import json
 import os
 
+from vae.modeling_flax_pytorch_utils import convert_pytorch_state_dict_to_flax
+
 CONFIG_NAME = "config.json"
-WEIGHTS_NAME = "diffusion_pytorch_model.bin"
-WEIGHTS_INDEX_NAME = "diffusion_pytorch_model.bin.index.json"
-FLAX_WEIGHTS_NAME = "diffusion_flax_model.msgpack"
+WEIGHTS_NAME = "sdxl_vae.safetensors"
 
 
 class FlaxUpsample2D(nn.Module):
@@ -598,15 +600,20 @@ class FlaxAutoencoderKL(nn.Module):
             dtype=self.dtype,
         )
 
-    def init_weights(self, rng: jax.Array) -> FrozenDict:
+    def init_weights(self, rng: jax.Array) -> Dict:
         # init input tensors
-        sample_shape = (1, self.config.in_channels, self.config.sample_size, self.config.sample_size)
+        sample_shape = (
+            1,
+            self.config.in_channels,
+            self.config.sample_size,
+            self.config.sample_size,
+        )
         sample = jnp.zeros(sample_shape, dtype=jnp.float32)
 
         params_rng, dropout_rng, gaussian_rng = jax.random.split(rng, 3)
         rngs = {"params": params_rng, "dropout": dropout_rng, "gaussian": gaussian_rng}
 
-        return self.init(rngs, sample)["params"]
+        return self.init(rngs, sample)  # type: ignore
 
     def encode(self, sample, deterministic: bool = True):
         sample = jnp.transpose(sample, (0, 2, 3, 1))
@@ -642,7 +649,7 @@ class FlaxAutoencoderKL(nn.Module):
 
 
 def load_pretrained_vae(
-    hf_model_id: str = "pcuenq/sd-vae-ft-mse-flax",
+    hf_model_id: str,
 ) -> Tuple[FlaxAutoencoderKL, Any]:
     folder_path = snapshot_download(hf_model_id)
 
@@ -653,11 +660,14 @@ def load_pretrained_vae(
             config_json.pop(key)
     config = AutoencoderConfig(**config_json)
 
-    flax_weights_binary = open(
-        os.path.join(folder_path, FLAX_WEIGHTS_NAME), "rb"
-    ).read()
-    flax_weights_state_dict = from_bytes(FlaxAutoencoderKL, flax_weights_binary)
+    logger.info(f"Loading weights bytes..")
+    flax_weights_bytes = open(os.path.join(folder_path, WEIGHTS_NAME), "rb").read()
+    logger.info(f"Loading state dict..")
+    state_dict = load(flax_weights_bytes)
     model = FlaxAutoencoderKL(config)
+    logger.info(f"Initializing weights..")
     variables = model.init_weights(jax.random.PRNGKey(0))
-    variables['params'] = flax_weights_state_dict
+    logger.info(f"Converting state dict..")
+    state_dict = convert_pytorch_state_dict_to_flax(state_dict, variables['params'])
+    variables["params"] = state_dict
     return model, variables

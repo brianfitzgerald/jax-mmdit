@@ -1,4 +1,3 @@
-
 import re
 
 import jax.numpy as jnp
@@ -39,7 +38,10 @@ def rename_key_and_reshape_tensor(pt_tuple_key, pt_tensor, random_flax_state_dic
                 weight_name = "kernel" if weight_name == "weight" else weight_name
                 renamed_pt_tuple_key = pt_tuple_key[:-2] + (rename_to, weight_name)
                 if renamed_pt_tuple_key in random_flax_state_dict:
-                    assert random_flax_state_dict[renamed_pt_tuple_key].shape == pt_tensor.T.shape
+                    assert (
+                        random_flax_state_dict[renamed_pt_tuple_key].shape
+                        == pt_tensor.T.shape
+                    )
                     return renamed_pt_tuple_key, pt_tensor.T
 
     if (
@@ -50,12 +52,18 @@ def rename_key_and_reshape_tensor(pt_tuple_key, pt_tensor, random_flax_state_dic
     ):
         renamed_pt_tuple_key = pt_tuple_key[:-1] + ("scale",)
         return renamed_pt_tuple_key, pt_tensor
-    elif pt_tuple_key[-1] in ["weight", "gamma"] and pt_tuple_key[:-1] + ("scale",) in random_flax_state_dict:
+    elif (
+        pt_tuple_key[-1] in ["weight", "gamma"]
+        and pt_tuple_key[:-1] + ("scale",) in random_flax_state_dict
+    ):
         renamed_pt_tuple_key = pt_tuple_key[:-1] + ("scale",)
         return renamed_pt_tuple_key, pt_tensor
 
     # embedding
-    if pt_tuple_key[-1] == "weight" and pt_tuple_key[:-1] + ("embedding",) in random_flax_state_dict:
+    if (
+        pt_tuple_key[-1] == "weight"
+        and pt_tuple_key[:-1] + ("embedding",) in random_flax_state_dict
+    ):
         pt_tuple_key = pt_tuple_key[:-1] + ("embedding",)
         return renamed_pt_tuple_key, pt_tensor
 
@@ -84,14 +92,9 @@ def rename_key_and_reshape_tensor(pt_tuple_key, pt_tensor, random_flax_state_dic
     return pt_tuple_key, pt_tensor
 
 
-def convert_pytorch_state_dict_to_flax(pt_state_dict, flax_model, init_key=42):
-    # Step 1: Convert pytorch tensor to numpy
-    pt_state_dict = {k: v.numpy() for k, v in pt_state_dict.items()}
+def convert_pytorch_state_dict_to_flax(pt_state_dict, flax_state_dict):
 
-    # Step 2: Since the model is stateless, get random Flax params
-    random_flax_params = flax_model.init_weights(PRNGKey(init_key))
-
-    random_flax_state_dict = flatten_dict(random_flax_params)
+    random_flax_state_dict = flatten_dict(flax_state_dict)
     flax_state_dict = {}
 
     # Need to change some parameters name to match Flax names
@@ -100,13 +103,15 @@ def convert_pytorch_state_dict_to_flax(pt_state_dict, flax_model, init_key=42):
         pt_tuple_key = tuple(renamed_pt_key.split("."))
 
         # Correctly rename weight parameters
-        flax_key, flax_tensor = rename_key_and_reshape_tensor(pt_tuple_key, pt_tensor, random_flax_state_dict)
+        flax_key, flax_tensor = rename_key_and_reshape_tensor(
+            pt_tuple_key, pt_tensor, random_flax_state_dict
+        )
 
         if flax_key in random_flax_state_dict:
-            if flax_tensor.shape != random_flax_state_dict[flax_key].shape: # type: ignore
+            if flax_tensor.shape != random_flax_state_dict[flax_key].shape:  # type: ignore
                 raise ValueError(
                     f"PyTorch checkpoint seems to be incorrect. Weight {pt_key} was expected to be of shape "
-                    f"{random_flax_state_dict[flax_key].shape}, but is {flax_tensor.shape}." # type: ignore
+                    f"{random_flax_state_dict[flax_key].shape}, but is {flax_tensor.shape}."  # type: ignore
                 )
 
         # also add unexpected weight so that warning is thrown
