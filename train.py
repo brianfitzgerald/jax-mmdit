@@ -89,8 +89,8 @@ DATASET_CONFIGS = {
         image_field_name="vae_output",
         label_field_name="label",
         n_labels_to_sample=10,
-        batch_size=32,
-        model_config=ModelConfig(dim=1152, n_layers=28, n_heads=16, patch_size=2),
+        batch_size=128,
+        model_config=ModelConfig(dim=512, n_layers=24, n_heads=16, patch_size=2),
     ),
     # https://huggingface.co/datasets/cifar10
     "cifar10": DatasetConfig(
@@ -333,7 +333,7 @@ def process_batch(
     # convert to NCHW format
     if not using_latents:
         image_jnp = image_jnp.transpose((0, 3, 1, 2))
-        image_jnp = normalize_images(image_jnp)
+    image_jnp = normalize_images(image_jnp)
     label = jnp.asarray(batch[label_field_name], dtype=jnp.float32)
     if label.ndim == 2:
         label = label[:, 0]
@@ -413,7 +413,7 @@ def run_eval(
 
 def main(
     n_epochs: int = 100,
-    learning_rate: float = 5e-4,
+    learning_rate: float = 1e-4,
     eval_save_steps: int = 250,
     n_eval_batches: int = 1,
     sample_every_n: int = 1,

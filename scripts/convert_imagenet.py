@@ -17,8 +17,8 @@ class uint8(Encoding):
         return obj.tobytes()
 
     def decode(self, data: bytes) -> Any:
-        x = np.frombuffer(data, np.uint8).astype(np.float32)
-        return (x / 255.0 - 0.5) * 24.0
+        x = np.frombuffer(data, np.uint8)
+        return x
 
 
 _encodings["uint8"] = uint8
@@ -45,10 +45,13 @@ logger.info(
 
 new_rows = []
 
-for i, sample in enumerate(tqdm(train_dataset)):
-    sample["vae_output"] = sample["vae_output"].astype(np.int32)
-    sample['label'] = np.array(sample['label']).astype(np.int64)
-    new_rows.append(sample)
+for i, sample in enumerate(tqdm(train_dataset, dynamic_ncols=True)):
+    try:
+        sample["vae_output"] = sample["vae_output"].astype(np.int8)
+        sample['label'] = np.array(sample['label']).astype(np.int8)
+        new_rows.append(sample)
+    except Exception as e:
+        logger.error(f"Error at iteration {i}: {e}")
     if i % save_every == 0 and i > 0:
         logger.info(f"Uploading at iteration {i}...")
         dataset_new_rows = Dataset.from_list(new_rows)
