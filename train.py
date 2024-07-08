@@ -82,14 +82,14 @@ DATASET_CONFIGS = {
     # https://huggingface.co/datasets/zh-plus/tiny-imagenet
     "imagenet": DatasetConfig(
         hf_dataset_uri="roborovski/imagenet-int8-flax",
-        n_classes=200,
+        n_classes=1000,
         latent_size=32,
         n_channels=4,
         label_names=list(IMAGENET_LABELS_NAMES.values()),
         image_field_name="vae_output",
         label_field_name="label",
         n_labels_to_sample=10,
-        batch_size=64,
+        batch_size=32,
         model_config=ModelConfig(dim=1152, n_layers=28, n_heads=16, patch_size=2),
     ),
     # https://huggingface.co/datasets/cifar10
