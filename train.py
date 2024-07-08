@@ -66,7 +66,7 @@ class DatasetConfig:
     hf_dataset_uri: str
     n_classes: int
     latent_size: int
-    eval_split_name: str = "test"
+    eval_split_name: Optional[str] = None
     train_split_name: str = "train"
     image_field_name: str = "image"
     label_field_name: str = "label"
@@ -80,12 +80,14 @@ class DatasetConfig:
 
 DATASET_CONFIGS = {
     # https://huggingface.co/datasets/zh-plus/tiny-imagenet
-    "tiny_imagenet": DatasetConfig(
-        hf_dataset_uri="zh-plus/tiny-imagenet",
+    "imagenet": DatasetConfig(
+        hf_dataset_uri="roborovski/imagenet-int8-flax",
         n_classes=200,
-        eval_split_name="valid",
-        latent_size=64,
+        latent_size=32,
+        n_channels=4,
         label_names=list(IMAGENET_LABELS_NAMES.values()),
+        image_field_name="vae_output",
+        label_field_name="label",
         n_labels_to_sample=10,
         batch_size=64,
         model_config=ModelConfig(dim=1152, n_layers=28, n_heads=16, patch_size=2),
@@ -284,14 +286,17 @@ class Trainer:
             out_shardings=step_out_sharding,
         )
 
-        logger.info("AOT compiling step functions...")
-        compiled_step: Compiled = self.train_step.lower(
-            self.train_state, *input_values[:2], init_key
-        ).compile()
-        train_cost_analysis: Dict = compiled_step.cost_analysis()[0]  # type: ignore
-        trace_module_calls(self.model, init_key, *input_values, init_key, True)
-        self.flops_for_step = train_cost_analysis.get("flops", 0)
-        logger.info(f"Steps compiled, train cost analysis FLOPs: {self.flops_for_step}")
+        if profile:
+            logger.info("AOT compiling step functions...")
+            compiled_step: Compiled = self.train_step.lower(
+                self.train_state, *input_values[:2], init_key
+            ).compile()
+            train_cost_analysis: Dict = compiled_step.cost_analysis()[0]  # type: ignore
+            trace_module_calls(self.model, init_key, *input_values, init_key, True)
+            self.flops_for_step = train_cost_analysis.get("flops", 0)
+            logger.info(f"Steps compiled, train cost analysis FLOPs: {self.flops_for_step}")
+        else:
+            self.flops_for_step = 0
 
     def save_checkpoint(self, global_step: int):
         self.checkpoint_manager.save(global_step, self.train_state)
@@ -303,6 +308,7 @@ def process_batch(
     n_channels: int,
     label_field_name: str,
     image_field_name: str,
+    using_latents: bool = True
 ) -> Tuple[jnp.ndarray, jnp.ndarray]:
     """
     Process a batch of samples from the dataset.
@@ -313,18 +319,24 @@ def process_batch(
 
     images: List[Image.Image] = batch[image_field_name]
     img_mode = "L" if n_channels == 1 else "RGB"
-    for i, image in enumerate(images):
-        if image.width != image.height:
-            smaller_dim = min(image.width, image.height)
-            image = center_crop(image, smaller_dim, smaller_dim)
-        images[i] = image.resize((latent_size, latent_size)).convert(img_mode)
+    if not using_latents:
+        for i, image in enumerate(images):
+            if image.width != image.height:
+                smaller_dim = min(image.width, image.height)
+                image = center_crop(image, smaller_dim, smaller_dim)
+            images[i] = image.resize((latent_size, latent_size)).convert(img_mode)
     image_jnp = jnp.asarray(images, dtype=jnp.float32)
+    if using_latents:
+        image_jnp = image_jnp.reshape(-1, n_channels, latent_size, latent_size)
     if n_channels == 1:
         image_jnp = image_jnp[:, :, :, None]
     # convert to NCHW format
-    image_jnp = image_jnp.transpose((0, 3, 1, 2))
-    image_jnp = normalize_images(image_jnp)
+    if not using_latents:
+        image_jnp = image_jnp.transpose((0, 3, 1, 2))
+        image_jnp = normalize_images(image_jnp)
     label = jnp.asarray(batch[label_field_name], dtype=jnp.float32)
+    if label.ndim == 2:
+        label = label[:, 0]
     return image_jnp, label
 
 
@@ -405,7 +417,7 @@ def main(
     eval_save_steps: int = 250,
     n_eval_batches: int = 1,
     sample_every_n: int = 1,
-    dataset_name: str = "cifar10",
+    dataset_name: str = "imagenet",
     profile: bool = False,
     half_precision: bool = False,
     **kwargs,
@@ -427,14 +439,17 @@ def main(
     assert dataset_name in DATASET_CONFIGS, f"Invalid dataset name: {dataset_name}"
 
     dataset_config = DATASET_CONFIGS[dataset_name]
-    dataset = cast(DatasetDict, load_dataset(dataset_config.hf_dataset_uri))
+    dataset: DatasetDict = load_dataset(dataset_config.hf_dataset_uri) # type: ignore
+    if not dataset_config.eval_split_name:
+        dataset_config.eval_split_name = "test"
+        dataset: DatasetDict = dataset["train"].train_test_split(test_size=0.1)
     train_dataset = dataset[dataset_config.train_split_name]
     eval_dataset = dataset[dataset_config.eval_split_name]
 
+    device_count = jax.device_count()
     rng = random.PRNGKey(0)
 
     trainer = Trainer(rng, dataset_config, learning_rate, profile, half_precision)
-    device_count = jax.device_count()
 
     summary_writer = SummaryWriter(flush_secs=1, max_queue=1)
     ensure_directory("samples", clear=True)

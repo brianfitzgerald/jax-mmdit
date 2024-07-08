@@ -433,6 +433,8 @@ class DiTModel(nn.Module):
         y: label tensor of shape (B,)
         """
 
+        print("x shape", x.shape)
+        print("label shape", y.shape)
         # transpose since flax uses NCHW format
         x = x.transpose((0, 2, 3, 1))
         x = self.init_conv_seq(x)
