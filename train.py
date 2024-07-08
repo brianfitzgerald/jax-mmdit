@@ -333,7 +333,9 @@ def process_batch(
     # convert to NCHW format
     if not using_latents:
         image_jnp = image_jnp.transpose((0, 3, 1, 2))
-    image_jnp = normalize_images(image_jnp)
+        image_jnp = normalize_images(image_jnp)
+    else:
+        image_jnp = image_jnp / 255
     label = jnp.asarray(batch[label_field_name], dtype=jnp.float32)
     if label.ndim == 2:
         label = label[:, 0]
