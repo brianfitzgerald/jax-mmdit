@@ -90,7 +90,7 @@ DATASET_CONFIGS = {
         label_field_name="label",
         n_labels_to_sample=10,
         batch_size=128,
-        model_config=ModelConfig(dim=512, n_layers=24, n_heads=16, patch_size=2),
+        model_config=ModelConfig(dim=512, n_layers=10, n_heads=16, patch_size=2),
     ),
     # https://huggingface.co/datasets/cifar10
     "cifar10": DatasetConfig(
@@ -110,7 +110,7 @@ DATASET_CONFIGS = {
             "ship",
             "truck",
         ],
-        model_config=ModelConfig(dim=256, n_layers=10, n_heads=8),
+        model_config=ModelConfig(dim=512, n_layers=10, n_heads=16, patch_size=2),
     ),
     # TODO find the class counts and resize with preprocessor
     "butterflies": DatasetConfig(
@@ -215,7 +215,8 @@ class Trainer:
 
         # Async checkpointer for saving checkpoints across processes
         base_dir_abs = os.getcwd()
-        self.checkpoint_manager = ocp.CheckpointManager(f"{base_dir_abs}/checkpoints")
+        options = ocp.CheckpointManagerOptions(max_to_keep=3)
+        self.checkpoint_manager = ocp.CheckpointManager(f"{base_dir_abs}/checkpoints", options=options)
 
         # The axes are (data, model), so the mesh is (n_devices, 1) as the model is replicated across devices.
         # This object corresponds the axis names to the layout of the physical devices,
@@ -299,7 +300,8 @@ class Trainer:
             self.flops_for_step = 0
 
     def save_checkpoint(self, global_step: int):
-        self.checkpoint_manager.save(global_step, self.train_state)
+        if self.train_state is not None:
+            self.checkpoint_manager.save(global_step, args=ocp.args.StandardSave(self.train_state)) # type: ignore
 
 
 def process_batch(
@@ -335,7 +337,7 @@ def process_batch(
         image_jnp = image_jnp.transpose((0, 3, 1, 2))
         image_jnp = normalize_images(image_jnp)
     else:
-        image_jnp = image_jnp / 255
+        image_jnp = image_jnp / 255 - 0.5
     label = jnp.asarray(batch[label_field_name], dtype=jnp.float32)
     if label.ndim == 2:
         label = label[:, 0]
@@ -419,7 +421,7 @@ def main(
     eval_save_steps: int = 250,
     n_eval_batches: int = 1,
     sample_every_n: int = 1,
-    dataset_name: str = "imagenet",
+    dataset_name: str = "cifar10",
     profile: bool = False,
     half_precision: bool = False,
     **kwargs,
@@ -530,7 +532,7 @@ def main(
 
             train_iter.set_postfix(iter_description_dict)
 
-            if i % eval_save_steps == 0 or profile:
+            if global_step % eval_save_steps == 0 or profile:
                 trainer.save_checkpoint(global_step)
                 run_eval(
                     eval_dataset,

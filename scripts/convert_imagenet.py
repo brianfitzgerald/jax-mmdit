@@ -1,9 +1,7 @@
 from streaming.base.format.mds.encodings import Encoding, _encodings
-from datasets import load_dataset, Dataset, concatenate_datasets
+from datasets import Dataset, concatenate_datasets
 from streaming import StreamingDataset
-import pyarrow.parquet as pq
 from tqdm import tqdm
-import pandas as pd
 import numpy as np
 from typing import Any
 from loguru import logger
@@ -17,7 +15,7 @@ class uint8(Encoding):
         return obj.tobytes()
 
     def decode(self, data: bytes) -> Any:
-        x = np.frombuffer(data, np.uint8)
+        x = np.frombuffer(data, np.uint8).astype(np.float32)
         return x
 
 
@@ -48,7 +46,7 @@ new_rows = []
 for i, sample in enumerate(tqdm(train_dataset, dynamic_ncols=True)):
     try:
         sample["vae_output"] = sample["vae_output"].astype(np.int8)
-        sample['label'] = np.array(sample['label']).astype(np.int8)
+        sample["label"] = np.array(sample["label"]).astype(np.int8)
         new_rows.append(sample)
     except Exception as e:
         logger.error(f"Error at iteration {i}: {e}")
