@@ -2,6 +2,7 @@ import jax
 import flax.linen.module as module_lib
 from flax.linen.summary import (
     _get_call_flops,
+    _bytes_repr
 )
 from typing import Tuple, List
 from dataclasses import dataclass
@@ -23,6 +24,7 @@ DEVICE_PEAK_FLOPS = {
     }
 }
 
+
 def get_peak_flops() -> float:
     device_kind = jax.devices()[0].device_kind
     peak_flops = DEVICE_PEAK_FLOPS[device_kind]["fp32"]
@@ -33,7 +35,6 @@ def trace_module_calls(module: module_lib.Module, *args, **kwargs) -> List[Modul
     """
     Get the FLOPs estimate and parameter count for a Flax module.
     """
-
 
     with module_lib._tabulate_context():
 
@@ -58,3 +59,12 @@ def trace_module_calls(module: module_lib.Module, *args, **kwargs) -> List[Modul
         )
 
     return calls_out
+
+
+def memory_usage_params(model_params):
+    total_bytes, total_params = 0, 0
+    for param in jax.tree_leaves(model_params):
+        total_bytes += param.size * param.dtype.itemsize
+        total_params += param.size
+    total_bytes = _bytes_repr(total_bytes)
+    return total_bytes, total_params

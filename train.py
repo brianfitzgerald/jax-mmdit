@@ -30,7 +30,7 @@ from labels import IMAGENET_LABELS_NAMES
 from model import DiTModel
 from sampling import rectified_flow_sample, rectified_flow_step
 from utils import center_crop, ensure_directory, image_grid, normalize_images
-from profiling import trace_module_calls, get_peak_flops
+from profiling import memory_usage_params, trace_module_calls, get_peak_flops
 
 jax.experimental.compilation_cache.compilation_cache.set_cache_dir("jit_cache")
 
@@ -57,6 +57,22 @@ class ModelConfig:
     patch_size: int = 2
 
 
+DIT_MODELS = {
+    "XL_2": ModelConfig(n_layers=28, dim=1152, patch_size=2, n_heads=16),
+    "XL_4": ModelConfig(n_layers=28, dim=1152, patch_size=4, n_heads=16),
+    "XL_8": ModelConfig(n_layers=28, dim=1152, patch_size=8, n_heads=16),
+    "L_2": ModelConfig(n_layers=24, dim=1024, patch_size=2, n_heads=16),
+    "L_4": ModelConfig(n_layers=24, dim=1024, patch_size=4, n_heads=16),
+    "L_8": ModelConfig(n_layers=24, dim=1024, patch_size=8, n_heads=16),
+    "B_2": ModelConfig(n_layers=12, dim=768, patch_size=2, n_heads=12),
+    "B_4": ModelConfig(n_layers=12, dim=768, patch_size=4, n_heads=12),
+    "B_8": ModelConfig(n_layers=12, dim=768, patch_size=8, n_heads=12),
+    "S_2": ModelConfig(n_layers=12, dim=384, patch_size=2, n_heads=6),
+    "S_4": ModelConfig(n_layers=12, dim=384, patch_size=4, n_heads=6),
+    "S_8": ModelConfig(n_layers=12, dim=384, patch_size=8, n_heads=6),
+}
+
+
 @dataclass
 class DatasetConfig:
     """
@@ -74,8 +90,10 @@ class DatasetConfig:
     n_channels: int = 3
     n_labels_to_sample: Optional[int] = None
     batch_size: int = 256
+    # used for streaming datasets
+    dataset_length: Optional[int] = None
 
-    model_config: ModelConfig = ModelConfig(dim=64, n_layers=6, n_heads=4)
+    model_config: ModelConfig = DIT_MODELS["B_2"]
 
 
 DATASET_CONFIGS = {
@@ -83,15 +101,16 @@ DATASET_CONFIGS = {
     "imagenet": DatasetConfig(
         hf_dataset_uri="evanarlian/imagenet_1k_resized_256",
         n_classes=1000,
-        latent_size=64,
-        n_channels=3,
+        latent_size=32,
+        n_channels=4,
+        dataset_length=1281167,
         label_names=list(IMAGENET_LABELS_NAMES.values()),
         image_field_name="image",
         label_field_name="label",
         n_labels_to_sample=10,
         eval_split_name="val",
-        batch_size=8,
-        model_config=ModelConfig(dim=512, n_layers=14, n_heads=8, patch_size=2),
+        batch_size=256,
+        model_config=DIT_MODELS["XL_2"],
     ),
     # https://huggingface.co/datasets/cifar10
     "cifar10": DatasetConfig(
@@ -111,7 +130,7 @@ DATASET_CONFIGS = {
             "ship",
             "truck",
         ],
-        model_config=ModelConfig(dim=512, n_layers=10, n_heads=16, patch_size=2),
+        model_config=DIT_MODELS["L_2"],
     ),
     # TODO find the class counts and resize with preprocessor
     "butterflies": DatasetConfig(
@@ -125,7 +144,7 @@ DATASET_CONFIGS = {
         n_channels=1,
         n_classes=10,
         latent_size=28,
-        batch_size=512
+        batch_size=512,
     ),
     "flowers": DatasetConfig(
         hf_dataset_uri="nelorth/oxford-flowers",
@@ -217,7 +236,9 @@ class Trainer:
         # Async checkpointer for saving checkpoints across processes
         base_dir_abs = os.getcwd()
         options = ocp.CheckpointManagerOptions(max_to_keep=3)
-        self.checkpoint_manager = ocp.CheckpointManager(f"{base_dir_abs}/checkpoints", options=options)
+        self.checkpoint_manager = ocp.CheckpointManager(
+            f"{base_dir_abs}/checkpoints", options=options
+        )
 
         # The axes are (data, model), so the mesh is (n_devices, 1) as the model is replicated across devices.
         # This object corresponds the axis names to the layout of the physical devices,
@@ -259,10 +280,8 @@ class Trainer:
         self.train_state = jit_create_train_state_fn(
             *input_values, self.model, self.optimizer
         )
-        parameter_count = sum(
-            x.size for x in jax.tree_util.tree_leaves(self.train_state.params)
-        )
-        logger.info(f"Model parameter count: {parameter_count}")
+        total_bytes, total_params = memory_usage_params(self.train_state.params)
+        logger.info(f"Model parameter count: {total_params} using: {total_bytes}")
 
         logger.info("JIT compiling step functions...")
 
@@ -294,15 +313,16 @@ class Trainer:
                 self.train_state, *input_values[:2], init_key
             ).compile()
             train_cost_analysis: Dict = compiled_step.cost_analysis()[0]  # type: ignore
-            trace_module_calls(self.model, init_key, *input_values, init_key, True)
             self.flops_for_step = train_cost_analysis.get("flops", 0)
-            logger.info(f"Steps compiled, train cost analysis FLOPs: {self.flops_for_step}")
+            logger.info(
+                f"Steps compiled, train cost analysis FLOPs: {self.flops_for_step}"
+            )
         else:
             self.flops_for_step = 0
 
     def save_checkpoint(self, global_step: int):
         if self.train_state is not None:
-            self.checkpoint_manager.save(global_step, args=ocp.args.StandardSave(self.train_state)) # type: ignore
+            self.checkpoint_manager.save(global_step, args=ocp.args.StandardSave(self.train_state))  # type: ignore
 
 
 def process_batch(
@@ -311,7 +331,7 @@ def process_batch(
     n_channels: int,
     label_field_name: str,
     image_field_name: str,
-    using_latents: bool = False
+    using_latents: bool = False,
 ) -> Tuple[jnp.ndarray, jnp.ndarray]:
     """
     Process a batch of samples from the dataset.
@@ -444,7 +464,7 @@ def main(
     assert dataset_name in DATASET_CONFIGS, f"Invalid dataset name: {dataset_name}"
 
     dataset_config = DATASET_CONFIGS[dataset_name]
-    dataset: DatasetDict = load_dataset(dataset_config.hf_dataset_uri, streaming=True) # type: ignore
+    dataset: DatasetDict = load_dataset(dataset_config.hf_dataset_uri, streaming=True)  # type: ignore
     if not dataset_config.eval_split_name:
         dataset_config.eval_split_name = "test"
         dataset: DatasetDict = dataset["train"].train_test_split(test_size=0.1)
@@ -461,7 +481,7 @@ def main(
 
     iter_description_dict = {"loss": 0.0, "eval_loss": 0.0, "epoch": 0, "step": 0}
 
-    n_samples = 1_200_167 
+    n_samples = dataset_config.dataset_length or len(train_dataset)
 
     n_evals = 0
     for epoch in range(n_epochs):
