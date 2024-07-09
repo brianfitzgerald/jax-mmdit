@@ -5,6 +5,14 @@ from tqdm import tqdm
 import numpy as np
 from typing import Any
 from loguru import logger
+import numpy as np
+import jax
+import jax.numpy as jnp
+from jax import Array
+from loguru import logger
+
+from vae.vae_flax import load_pretrained_vae
+
 
 dataset: Dataset = Dataset.from_dict({"label": [], "vae_output": []})
 dataset.set_format(type="numpy")
@@ -27,7 +35,7 @@ local_train_dir = "./local_train_dir"
 
 train_dataset = StreamingDataset(
     local=local_train_dir,
-    remote=remote_train_dir,
+    remote="evanarlian/imagenet_1k_resized_256",
     split=None,
     shuffle=True,
     shuffle_algo="naive",
@@ -43,9 +51,20 @@ logger.info(
 
 new_rows = []
 
+vae, params = load_pretrained_vae("pcuenq/sd-vae-ft-mse-flax", True)
+sample_size = vae.config.sample_size
+
+
+@jax.jit
+def vae_encode(sample: Array) -> Array:
+    return vae.apply(params, sample, method="decode")  # type: ignore
+
+
 for i, sample in enumerate(tqdm(train_dataset, dynamic_ncols=True)):
     try:
-        sample["vae_output"] = sample["vae_output"].astype(np.int8)
+        sample["vae_output"] = vae_encode(
+            jnp.array(sample["image"]).reshape(1, 4, 32, 32)
+        ).astype(np.int8)
         sample["label"] = np.array(sample["label"]).astype(np.int8)
         new_rows.append(sample)
     except Exception as e:

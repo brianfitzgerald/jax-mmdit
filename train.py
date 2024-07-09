@@ -81,16 +81,17 @@ class DatasetConfig:
 DATASET_CONFIGS = {
     # https://huggingface.co/datasets/zh-plus/tiny-imagenet
     "imagenet": DatasetConfig(
-        hf_dataset_uri="roborovski/imagenet-int8-flax",
+        hf_dataset_uri="evanarlian/imagenet_1k_resized_256",
         n_classes=1000,
-        latent_size=32,
-        n_channels=4,
+        latent_size=64,
+        n_channels=3,
         label_names=list(IMAGENET_LABELS_NAMES.values()),
-        image_field_name="vae_output",
+        image_field_name="image",
         label_field_name="label",
         n_labels_to_sample=10,
-        batch_size=128,
-        model_config=ModelConfig(dim=512, n_layers=10, n_heads=16, patch_size=2),
+        eval_split_name="val",
+        batch_size=8,
+        model_config=ModelConfig(dim=512, n_layers=14, n_heads=8, patch_size=2),
     ),
     # https://huggingface.co/datasets/cifar10
     "cifar10": DatasetConfig(
@@ -310,7 +311,7 @@ def process_batch(
     n_channels: int,
     label_field_name: str,
     image_field_name: str,
-    using_latents: bool = True
+    using_latents: bool = False
 ) -> Tuple[jnp.ndarray, jnp.ndarray]:
     """
     Process a batch of samples from the dataset.
@@ -359,7 +360,7 @@ def run_eval(
     """
     Run evaluation on the eval subset, and optionally sample the model
     """
-    num_eval_batches = len(eval_dataset) // dataset_config.batch_size
+    num_eval_batches = 1
     eval_iter = tqdm(
         eval_dataset.iter(batch_size=16, drop_last_batch=True),
         leave=False,
@@ -421,7 +422,7 @@ def main(
     eval_save_steps: int = 250,
     n_eval_batches: int = 1,
     sample_every_n: int = 1,
-    dataset_name: str = "cifar10",
+    dataset_name: str = "imagenet",
     profile: bool = False,
     half_precision: bool = False,
     **kwargs,
@@ -443,7 +444,7 @@ def main(
     assert dataset_name in DATASET_CONFIGS, f"Invalid dataset name: {dataset_name}"
 
     dataset_config = DATASET_CONFIGS[dataset_name]
-    dataset: DatasetDict = load_dataset(dataset_config.hf_dataset_uri) # type: ignore
+    dataset: DatasetDict = load_dataset(dataset_config.hf_dataset_uri, streaming=True) # type: ignore
     if not dataset_config.eval_split_name:
         dataset_config.eval_split_name = "test"
         dataset: DatasetDict = dataset["train"].train_test_split(test_size=0.1)
@@ -460,10 +461,12 @@ def main(
 
     iter_description_dict = {"loss": 0.0, "eval_loss": 0.0, "epoch": 0, "step": 0}
 
+    n_samples = 1_200_167 
+
     n_evals = 0
     for epoch in range(n_epochs):
         iter_description_dict.update({"epoch": epoch})
-        n_batches = len(train_dataset) // dataset_config.batch_size
+        n_batches = n_samples // dataset_config.batch_size
         train_iter = tqdm(
             train_dataset.iter(
                 batch_size=dataset_config.batch_size, drop_last_batch=True
@@ -474,7 +477,7 @@ def main(
         )
         for i, batch in enumerate(train_iter):
 
-            global_step = epoch * (len(train_dataset) // dataset_config.batch_size) + i
+            global_step = epoch * (n_samples // dataset_config.batch_size) + i
 
             # Train step
             images, labels = process_batch(
