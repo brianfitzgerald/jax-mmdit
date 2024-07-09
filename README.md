@@ -61,12 +61,15 @@ TensorBoard is used for logging. Samples will be logged to the `samples` directo
 
 I decided to not use either Tensorflow or PyTorch data loading, to keep external dependencies to a minimum. Instead datasets are loaded using [Datasets](https://huggingface.co/docs/datasets/en/index), and processed with the `process_batch` function. To add a new dataset, simply add a new entry to the `DATASET_CONFIGS` dictionary in `train.py`.
 
+### ImageNet Training
+
+ImageNet images are resized to 224x224, and then encoded with the SDXL VAE. You can use the `convert_imagenet.py` script to encode the images, and then use the `imagenet` dataset config to train on the dataset.
+
 ### Acknowledgements
 
 I heavily relied on Simo Ryu's [minRF](https://github.com/cloneofsimo/minRF) repo for the original implementation, especially the sampling code for rectified flow; as well as the [original DiT repo](https://github.com/facebookresearch/DiT).
 
 I also learned a lot from Rafi Witten's great [High Performance LLMs in Jax](https://github.com/rwitten/HighPerfLLMs2024) course, especially multi-device training in Jax.
-
 
 ### Todo
 

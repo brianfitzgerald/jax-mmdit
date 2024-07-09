@@ -1,1 +1,11 @@
 .DS_Store
+venv
+checkpoints
+jit_cache
+__pycache__
+runs
+samples
+local_train_dir
+vae_mds
+submit_*
+*.out.*

@@ -7,3 +7,4 @@ datasets[jax]
 tensorboardX
 imageio
 orbax
+loguru
